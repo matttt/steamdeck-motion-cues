@@ -1,0 +1,11 @@
+{
+  "name": "MotionCueDots",
+  "author": "Matthew Martori",
+  "flags": [],
+  "api_version": 1,
+  "publish": {
+    "tags": ["utility", "accessibility", "motion-cues"],
+    "description": "Draws accelerometer-driven motion cue dots over Steam Deck games.",
+    "image": ""
+  }
+}

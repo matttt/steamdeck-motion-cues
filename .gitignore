@@ -1,0 +1,15 @@
+*.log
+*.swp
+.DS_Store
+Thumbs.db
+
+.env
+.vscode/settings.json
+node_modules
+dist/
+__pycache__/
+
+backend/out
+backend/build
+backend/cmake-build-debug
+bin/
