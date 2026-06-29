@@ -18,7 +18,7 @@ DEFAULT_SETTINGS = {
     "dotAmount": 4,
     "dotSize": 1.00,
     "transparency": 0.30,
-    "response": 1.00,
+    "response": 1.5,
     "waveMotion": False,
     "simulateMotion": False,
 }
