@@ -34,5 +34,5 @@ The native executable is copied to both `backend/out/SteamDeckMotionCues` and `b
 
 
 ## Attribution
-Huge shoutout to TheLogicMaster on github and his [Overlaid repo](https://github.com/TheLogicMaster/OverLaid), from which I learned how to build an overlay and integrate it into a Decky plugin. 
-
+- Huge shoutout to TheLogicMaster on github and their [Overlaid repo](https://github.com/TheLogicMaster/OverLaid), from which I learned how to build an overlay and integrate it into a Decky plugin.
+- Another huge shoutout to kmicki for https://github.com/kmicki/SteamDeckGyroDSU for their reverse engineering efforts to sniff the steamdeck's imu data
