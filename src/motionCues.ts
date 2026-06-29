@@ -8,6 +8,7 @@ export interface MotionCueSettings {
     transparency: number
     response: number
     waveMotion: boolean
+    simulateMotion: boolean
 }
 
 export const defaultSettings: MotionCueSettings = {
@@ -18,6 +19,7 @@ export const defaultSettings: MotionCueSettings = {
     transparency: 0.3,
     response: 1,
     waveMotion: false,
+    simulateMotion: false,
 }
 
 // --- Color helpers (Decky's ColorPickerModal speaks hsla, the renderer wants hex) ---

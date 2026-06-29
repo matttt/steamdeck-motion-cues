@@ -82,15 +82,22 @@ struct Settings {
     float colorG = 1.0f;
     float colorB = 1.0f;
     bool wave = false;
+    bool simulateMotion = false;
 };
 
 // Pixels of dot-field travel for one full wave-motion size cycle.
 static constexpr float kWaveLengthPx = 100.0f;
 
-// Wave-motion size envelope. The trough dips below zero so a dot is fully
-// invisible for the portion of each cycle where the scale is <= 0.
-static constexpr float kWaveScaleMax = 1.25f;   // peak size multiplier
-static constexpr float kWaveScaleMin = -0.75f;  // trough; negative => invisible window
+// Wave-motion size envelope. Keep a positive floor so the two checkerboard
+// phases overlap instead of leaving a blank handoff.
+static constexpr float kWaveScaleMax = 1.25f;  // peak size multiplier
+static constexpr float kWaveScaleMin = 0.35f;  // smallest visible size multiplier
+
+// Dot-field physics tuning. Acceleration adds to velocity, drag bleeds it off,
+// and the cap prevents sustained acceleration from becoming uncomfortable.
+static constexpr float kDotAccelGain = 150.0f;
+static constexpr float kDotVelocityDrag = 1.0f;
+static constexpr float kDotMaxSpeed = 600.0f;
 
 static inline float clampf(float v, float lo, float hi) {
     return v < lo ? lo : (v > hi ? hi : v);
@@ -99,6 +106,40 @@ static inline float clampf(float v, float lo, float hi) {
 static inline float smoothstep(float a, float b, float x) {
     float t = clampf((x - a) / (b - a), 0.f, 1.f);
     return t * t * (3.f - 2.f * t);
+}
+
+static inline float vecLength(Vec3 v) {
+    return std::sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
+}
+
+static inline float dotVec(Vec3 a, Vec3 b) {
+    return a.x * b.x + a.y * b.y + a.z * b.z;
+}
+
+static inline Vec3 crossVec(Vec3 a, Vec3 b) {
+    return {
+        a.y * b.z - a.z * b.y,
+        a.z * b.x - a.x * b.z,
+        a.x * b.y - a.y * b.x
+    };
+}
+
+static inline Vec3 scaleVec(Vec3 v, float scale) {
+    return {v.x * scale, v.y * scale, v.z * scale};
+}
+
+static inline Vec3 lerpVec(Vec3 a, Vec3 b, float t) {
+    return {
+        a.x + (b.x - a.x) * t,
+        a.y + (b.y - a.y) * t,
+        a.z + (b.z - a.z) * t
+    };
+}
+
+static inline Vec3 withMagnitude(Vec3 v, float magnitude, Vec3 fallback) {
+    const float len = vecLength(v);
+    if (len <= 0.0001f) return fallback;
+    return scaleVec(v, magnitude / len);
 }
 
 static float readFloatFlag(int argc, const char *argv[], const char *name, float fallback) {
@@ -125,6 +166,7 @@ static Settings readSettings(int argc, const char *argv[]) {
     settings.colorG = clampf(readFloatFlag(argc, argv, "--color-g", settings.colorG), 0.0f, 1.0f);
     settings.colorB = clampf(readFloatFlag(argc, argv, "--color-b", settings.colorB), 0.0f, 1.0f);
     settings.wave = readIntFlag(argc, argv, "--wave", settings.wave ? 1 : 0) != 0;
+    settings.simulateMotion = readIntFlag(argc, argv, "--simulate-motion", settings.simulateMotion ? 1 : 0) != 0;
     return settings;
 }
 
@@ -164,7 +206,11 @@ private:
     static constexpr float kCountsPerG = 16384.0f;
     static constexpr float kG = 9.80665f;
     static constexpr float kCountToMs2 = kG / kCountsPerG;
-    static constexpr float kGravityLP = 0.02f;
+    static constexpr float kDegToRad = 3.14159265358979323846f / 180.0f;
+    static constexpr float kGyroCountToRad = (2000.0f / 32768.0f) * kDegToRad;
+    static constexpr float kGravityAccelCorrection = 0.02f;
+    static constexpr float kGyroDeadzoneRad = 0.015f;
+    static constexpr float kMaxGyroDt = 0.05f;
     static constexpr int kZeroFramesToReenable = 250;
 
     uint16_t vId;
@@ -177,6 +223,72 @@ private:
     Vec3 lastLinAccel;
     bool gravityInit = false;
     int zeroFrames = 0;
+
+    static float applyDeadzone(float value, float threshold) {
+        return std::fabs(value) < threshold ? 0.0f : value;
+    }
+
+    static bool isAllZero(const SdHidFrame &f) {
+        return f.AccelAxisRightToLeft == 0 && f.AccelAxisFrontToBack == 0 &&
+               f.AccelAxisTopToBottom == 0 && f.GyroAxisRightToLeft == 0 &&
+               f.GyroAxisFrontToBack == 0 && f.GyroAxisTopToBottom == 0;
+    }
+
+    static Vec3 gyroFromFrame(const SdHidFrame &f) {
+        return {
+            applyDeadzone(f.GyroAxisRightToLeft * kGyroCountToRad, kGyroDeadzoneRad),
+            applyDeadzone(f.GyroAxisTopToBottom * kGyroCountToRad, kGyroDeadzoneRad),
+            applyDeadzone(f.GyroAxisFrontToBack * kGyroCountToRad, kGyroDeadzoneRad)
+        };
+    }
+
+    static Vec3 rotateGravityByGyro(Vec3 currentGravity, Vec3 gyro, float dt) {
+        const float omega = vecLength(gyro);
+        if (dt <= 0.0f || omega <= 0.0001f) return currentGravity;
+
+        const Vec3 axis = scaleVec(gyro, 1.0f / omega);
+        const float angle = omega * dt;
+        const float c = std::cos(angle);
+        const float s = std::sin(angle);
+        const float axisDotGravity = dotVec(axis, currentGravity);
+        const Vec3 gravityCrossAxis = crossVec(currentGravity, axis);
+
+        // Gravity is stored in device coordinates. As the device rotates, that
+        // vector moves opposite the measured body angular velocity.
+        return {
+            currentGravity.x * c + gravityCrossAxis.x * s + axis.x * axisDotGravity * (1.0f - c),
+            currentGravity.y * c + gravityCrossAxis.y * s + axis.y * axisDotGravity * (1.0f - c),
+            currentGravity.z * c + gravityCrossAxis.z * s + axis.z * axisDotGravity * (1.0f - c)
+        };
+    }
+
+    void processFrame(const SdHidFrame &f, double now) {
+        Vec3 accel{
+            f.AccelAxisRightToLeft * kCountToMs2,
+            f.AccelAxisTopToBottom * kCountToMs2,
+            f.AccelAxisFrontToBack * kCountToMs2
+        };
+        const float accelMag = vecLength(accel);
+        if (accelMag <= 0.0001f) return;
+
+        if (!gravityInit) {
+            gravity = withMagnitude(accel, kG, {0.0f, 0.0f, kG});
+            gravityInit = true;
+        } else {
+            const float dt = lastPacketTime > 0.0 ? clampf((float)(now - lastPacketTime), 0.0f, kMaxGyroDt) : 0.0f;
+            gravity = rotateGravityByGyro(gravity, gyroFromFrame(f), dt);
+            gravity = withMagnitude(gravity, kG, gravity);
+
+            const float accelError = std::fabs(accelMag - kG);
+            const float accelTrust = 1.0f - smoothstep(kG * 0.10f, kG * 0.45f, accelError);
+            const float correction = kGravityAccelCorrection * accelTrust;
+            const Vec3 accelGravity = withMagnitude(accel, kG, gravity);
+            gravity = withMagnitude(lerpVec(gravity, accelGravity, correction), kG, gravity);
+        }
+
+        lastLinAccel = {accel.x - gravity.x, accel.y - gravity.y, accel.z - gravity.z};
+        lastPacketTime = now;
+    }
 
     static int readInterfaceNumber(const std::string &name) {
         std::string path = "/sys/class/hidraw/" + name + "/device/../bInterfaceNumber";
@@ -235,32 +347,13 @@ private:
 
         unsigned char buf[sizeof(SdHidFrame)];
         ssize_t r;
+        SdHidFrame latestFrame{};
+        bool haveLatestFrame = false;
         while ((r = read(fd, buf, sizeof(buf))) > 0) {
             if (r < (ssize_t)sizeof(SdHidFrame)) continue;
             const SdHidFrame *f = reinterpret_cast<const SdHidFrame *>(buf);
 
-            Vec3 accel{
-                f->AccelAxisRightToLeft * kCountToMs2,
-                f->AccelAxisTopToBottom * kCountToMs2,
-                f->AccelAxisFrontToBack * kCountToMs2
-            };
-
-            if (!gravityInit) {
-                gravity = accel;
-                gravityInit = true;
-            } else {
-                gravity.x = gravity.x * (1.f - kGravityLP) + accel.x * kGravityLP;
-                gravity.y = gravity.y * (1.f - kGravityLP) + accel.y * kGravityLP;
-                gravity.z = gravity.z * (1.f - kGravityLP) + accel.z * kGravityLP;
-            }
-
-            lastLinAccel = {accel.x - gravity.x, accel.y - gravity.y, accel.z - gravity.z};
-            lastPacketTime = now;
-
-            const bool allZero =
-                f->AccelAxisRightToLeft == 0 && f->AccelAxisFrontToBack == 0 &&
-                f->AccelAxisTopToBottom == 0 && f->GyroAxisRightToLeft == 0 &&
-                f->GyroAxisFrontToBack == 0 && f->GyroAxisTopToBottom == 0;
+            const bool allZero = isAllZero(*f);
             if (allZero) {
                 if (++zeroFrames > kZeroFramesToReenable) {
                     enableGyro();
@@ -268,10 +361,43 @@ private:
                 }
             } else {
                 zeroFrames = 0;
+                latestFrame = *f;
+                haveLatestFrame = true;
             }
         }
+
+        if (haveLatestFrame) processFrame(latestFrame, now);
     }
 };
+
+static float pulseSegment(double t, double start, double end, float value) {
+    if (t < start || t > end) return 0.0f;
+
+    const double duration = end - start;
+    const float fade = (float)std::min(0.6, duration * 0.45);
+    const float fadeIn = smoothstep(0.0f, fade, (float)(t - start));
+    const float fadeOut = 1.0f - smoothstep(0.0f, fade, (float)(t - (end - fade)));
+    return value * std::min(fadeIn, fadeOut);
+}
+
+static Vec3 sampleSimulatedMotion(double elapsed) {
+    const double cycle = 24.0;
+    double t = std::fmod(elapsed, cycle);
+    if (t < 0.0) t += cycle;
+
+    Vec3 accel;
+
+    // Body-space axes match the HID linear acceleration axes: +Y is forward/back,
+    // +X is lateral. Coasting intervals intentionally produce zero acceleration.
+    accel.y += pulseSegment(t, 0.0, 3.0, 2.1f);     // accelerate forward
+    accel.y += pulseSegment(t, 5.2, 7.3, -2.4f);    // brake from forward speed
+    accel.y += pulseSegment(t, 9.0, 11.5, -1.7f);   // accelerate backward
+    accel.y += pulseSegment(t, 13.3, 15.0, 2.0f);   // brake while backing up
+    accel.x += pulseSegment(t, 16.2, 19.1, 1.5f);   // steady-speed right turn
+    accel.x += pulseSegment(t, 20.1, 23.0, -1.5f);  // steady-speed left turn
+
+    return accel;
+}
 
 static void markGamescopeOverlay(GLFWwindow *window) {
     Display *x11Display = glfwGetX11Display();
@@ -325,14 +451,18 @@ int main(int argc, const char *argv[]) {
     ImGui_ImplOpenGL3_Init(glslVersion);
 
     HidMotionDriver input;
-    input.init();
+    if (settings.simulateMotion)
+        std::cout << "Using simulated motion input." << std::endl;
+    else
+        input.init();
 
     float flowVelX = 0.f;
     float flowVelY = 0.f;
     float flowOffX = 0.f;
     float flowOffY = 0.f;
     float traveled = 0.f;  // accumulated dot-field travel distance, drives wave motion
-    double lastTime = glfwGetTime();
+    const double startTime = glfwGetTime();
+    double lastTime = startTime;
     double lastLog = 0.0;
 
     constexpr float kPi = 3.14159265358979323846f;
@@ -351,27 +481,39 @@ int main(int argc, const char *argv[]) {
         glfwPollEvents();
 
         Vec3 lin;
-        const bool ok = input.sample(now, lin);
+        const bool ok = settings.simulateMotion || input.sample(now, lin);
+        if (settings.simulateMotion)
+            lin = sampleSimulatedMotion(now - startTime);
         const float pax = ok ? lin.x : 0.f;
         const float pay = ok ? lin.y : 0.f;
-        // const float planeMag = std::sqrt(pax * pax + pay * pay);
+        const float frameDt = clampf(dt, 0.0f, 0.05f);
         const float response = settings.response;
-        // const float intensity = smoothstep(0.0f, 1.0f, planeMag * response);
+        const float dotAccelGain = kDotAccelGain * response;
 
-        const float flowGain = 150.0f * response;
-        constexpr float flowSmooth = 0.85f;
-        flowVelX = flowVelX * flowSmooth + (-pax * flowGain) * (1.f - flowSmooth);
-        flowVelY = flowVelY * flowSmooth + (pay * flowGain) * (1.f - flowSmooth);
-        flowOffX += flowVelX * dt;
-        flowOffY += flowVelY * dt;
-        traveled += std::sqrt(flowVelX * flowVelX + flowVelY * flowVelY) * dt;
+        flowVelX += -pax * dotAccelGain * frameDt;
+        flowVelY += pay * dotAccelGain * frameDt;
+
+        const float drag = std::exp(-kDotVelocityDrag * frameDt);
+        flowVelX *= drag;
+        flowVelY *= drag;
+
+        const float flowSpeed = std::sqrt(flowVelX * flowVelX + flowVelY * flowVelY);
+        if (flowSpeed > kDotMaxSpeed) {
+            const float maxSpeedScale = kDotMaxSpeed / flowSpeed;
+            flowVelX *= maxSpeedScale;
+            flowVelY *= maxSpeedScale;
+        }
+
+        flowOffX += flowVelX * frameDt;
+        flowOffY += flowVelY * frameDt;
+        traveled += std::sqrt(flowVelX * flowVelX + flowVelY * flowVelY) * frameDt;
 
         if (debug && (now - lastLog) > 0.2) {
             lastLog = now;
             std::cerr << "[motion-cues] lin=(" << pax << "," << pay << "," << (ok ? lin.z : 0.f)
                       << ") response=" << response
                       << " flow=(" << flowVelX << "," << flowVelY << ")"
-                      << (ok ? "" : " [no device/stale]") << std::endl;
+                      << (settings.simulateMotion ? " [simulated]" : ok ? "" : " [no device/stale]") << std::endl;
         }
 
         ImGui_ImplGlfw_NewFrame();
@@ -401,11 +543,11 @@ int main(int argc, const char *argv[]) {
         float offY = std::fmod(flowOffY, spacing);
         if (offY < 0) offY += spacing;
 
-        // Wave motion: dots pulse in size by sin(2*pi * traveled / wavelength).
+        // Wave motion: dots pulse in size by a raised sine wave.
         // Checkerboard neighbors run in opposite phase via a per-dot sign flip.
         // Tracking how many whole cells the field has scrolled (wraps) keeps each
         // physical dot's parity stable, so the checkerboard never snaps on wrap.
-        const float globalSin = std::sin(kPi * traveled / kWaveLengthPx);
+        const float wavePhase = 0.5f + 0.5f * std::sin(kPi * traveled / kWaveLengthPx);
         const long wrapsX = (long)std::floor(flowOffX / spacing);
         const long wrapsY = (long)std::floor(flowOffY / spacing);
 
@@ -427,10 +569,10 @@ int main(int argc, const char *argv[]) {
 
                 float scale = 1.0f;
                 if (settings.wave) {
-                    const float sign = ((absCol + absRow) & 1L) ? -1.0f : 1.0f;
-                    const float t = 0.5f + 0.5f * globalSin * sign;  // [-1,1] sine -> [0,1]
-                    scale = kWaveScaleMin + (kWaveScaleMax - kWaveScaleMin) * t;  // -0.75x .. 1.25x
-                    if (scale <= 0.0f) continue;  // dip below zero: dot is invisible
+                    const bool alternatePhase = ((absCol + absRow) & 1L) != 0;
+                    const float t = alternatePhase ? 1.0f - wavePhase : wavePhase;
+                    const float eased = smoothstep(0.0f, 1.0f, t);
+                    scale = kWaveScaleMin + (kWaveScaleMax - kWaveScaleMin) * eased;
                 }
 
                 draw->AddCircleFilled({px, py}, radius * mask * scale, IM_COL32(red, green, blue, maskedAlpha), 16);
@@ -446,7 +588,8 @@ int main(int argc, const char *argv[]) {
         glfwSwapBuffers(window);
     }
 
-    input.shutdown();
+    if (!settings.simulateMotion)
+        input.shutdown();
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplGlfw_Shutdown();
     ImGui::DestroyContext();

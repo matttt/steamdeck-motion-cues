@@ -112,6 +112,15 @@ const Content: FC<{serverAPI: PluginAPI}> = ({serverAPI}) => {
 
             <PanelSectionRow>
                 <ToggleField
+                    checked={settings.simulateMotion}
+                    label="Simulate Motion"
+                    description="Use a looping car-like motion pattern instead of the Steam Deck's sensors, for testing out your settings :)"
+                    onChange={(checked) => saveSettings({simulateMotion: checked})}
+                />
+            </PanelSectionRow>
+
+            <PanelSectionRow>
+                <ToggleField
                     checked={settings.waveMotion}
                     label="Wave Motion"
                     description="Checkerboard dots pulse in size as the field drifts"

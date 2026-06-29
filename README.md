@@ -5,6 +5,7 @@ A small Decky plugin that draws accelerometer-driven cue dots over games. This i
 ## Controls
 
 - Enable: toggles the cue overlay.
+- Simulate motion: uses a looping car-like motion pattern instead of sensor input.
 - Dot color: hex color field plus presets.
 - Dot amount: controls dot density.
 - Transparency: controls dot alpha.

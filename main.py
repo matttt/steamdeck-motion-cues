@@ -20,6 +20,7 @@ DEFAULT_SETTINGS = {
     "transparency": 0.30,
     "response": 1.00,
     "waveMotion": False,
+    "simulateMotion": False,
 }
 
 logging.basicConfig(
@@ -65,6 +66,7 @@ def sanitize_settings(settings: dict[str, Any]) -> dict[str, Any]:
     sanitized.update(settings)
     sanitized["enabled"] = bool(sanitized["enabled"])
     sanitized["waveMotion"] = bool(sanitized["waveMotion"])
+    sanitized["simulateMotion"] = bool(sanitized["simulateMotion"])
     sanitized["dotColor"] = normalize_color(sanitized["dotColor"])
     sanitized["dotAmount"] = int(clamp_number(sanitized["dotAmount"], DEFAULT_SETTINGS["dotAmount"], 2, 24))
     sanitized["dotSize"] = round(clamp_number(sanitized["dotSize"], DEFAULT_SETTINGS["dotSize"], 0.25, 3.0), 3)
@@ -130,6 +132,8 @@ class MotionCuesBackend:
             f"{blue:.4f}",
             "--wave",
             "1" if self.config["waveMotion"] else "0",
+            "--simulate-motion",
+            "1" if self.config["simulateMotion"] else "0",
         ]
 
     async def create(self):
