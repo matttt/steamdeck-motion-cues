@@ -1,7 +1,7 @@
 
 
 
-# Motion Cue Dots
+# Steam Deck Motion Cue Dots
 https://github.com/user-attachments/assets/168230e9-617b-44dc-973d-01c738e015c8
 
 A small Decky plugin that draws accelerometer-driven cue dots over games. 
