@@ -31,3 +31,8 @@ pnpm run build:backend
 ```
 
 The native executable is copied to both `backend/out/SteamDeckMotionCues` and `bin/SteamDeckMotionCues`, which is the runtime path used by the plugin.
+
+
+## Attribution
+Huge shoutout to TheLogicMaster on github and his [Overlaid repo](https://github.com/TheLogicMaster/OverLaid), from which I learned how to build an overlay and integrate it into a Decky plugin. 
+
