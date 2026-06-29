@@ -1,6 +1,10 @@
-# Motion Cue Dots
 
-A small Decky plugin that draws accelerometer-driven cue dots over games. This is the MVP extracted from OverLaid: there is no overlay manager, no widget model, and no image/text overlay customization.
+
+
+# Steam Deck Motion Cue Dots
+https://github.com/user-attachments/assets/168230e9-617b-44dc-973d-01c738e015c8
+
+A small Decky plugin that draws accelerometer-driven cue dots over games. 
 
 ## Controls
 
@@ -27,3 +31,8 @@ pnpm run build:backend
 ```
 
 The native executable is copied to both `backend/out/SteamDeckMotionCues` and `bin/SteamDeckMotionCues`, which is the runtime path used by the plugin.
+
+
+## Attribution
+Huge shoutout to TheLogicMaster on github and his [Overlaid repo](https://github.com/TheLogicMaster/OverLaid), from which I learned how to build an overlay and integrate it into a Decky plugin. 
+
